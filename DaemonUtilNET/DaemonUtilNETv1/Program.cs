@@ -37,7 +37,7 @@ namespace DaemonUtilNETv1
             // 初始化taskItemKeyDict
             foreach (SettingItem item in settingJson)
             {
-                taskItemKeyDict[item] = getTaskKey(item);
+                taskItemKeyDict[item] = getTaskKey(item, settingJson, programSettingFileinfo);
                 taskItemFileDict[item] = new FileInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workingFolder", taskItemKeyDict[item] + ".pid"));
             }
 
@@ -48,7 +48,7 @@ namespace DaemonUtilNETv1
                 List<SettingItem> toRunProgramList = new List<SettingItem>();
 
                 // 刷新所有任务状态并且打印状态
-                refreshAllTaskStatus(settingJson, taskItemKeyDict, taskItemFileDict, taskItemRunningStatus, taskItemPid);
+                refreshAllTaskStatus(settingJson, taskItemFileDict, taskItemRunningStatus, taskItemPid);
                 for (int i = 0; i < settingJson.Count; i++)
                 {
                     SettingItem item = settingJson[i];
@@ -80,7 +80,7 @@ namespace DaemonUtilNETv1
                 }
 
                 Console.WriteLine("--------------------------------------------------\n");
-                Thread.Sleep(5000);
+                Thread.Sleep(10000);
             }
         }
 
@@ -164,11 +164,13 @@ namespace DaemonUtilNETv1
             return programTempFolderDirectoryInfo;
         }
 
-        static string getTaskKey(SettingItem settingItem)
+        static string getTaskKey(SettingItem settingItem, List<SettingItem> settingJson, FileInfo programSettingFileinfo)
         {
             StringBuilder stringBuilder = new StringBuilder();
             stringBuilder
                 .Append(Environment.ProcessPath)
+                .Append(programSettingFileinfo.FullName)
+                .Append(JsonSerializer.Serialize(settingJson))
                 .Append(settingItem.taskName)
                 .Append(settingItem.workFolder)
                 .Append(settingItem.programName)
@@ -188,9 +190,10 @@ namespace DaemonUtilNETv1
 
         static string? getPidContent(FileInfo fileInfo)
         {
-            if (fileInfo.Exists)
+            FileInfo newFileInfo = new FileInfo(fileInfo.FullName);
+            if (newFileInfo.Exists)
             {
-                string allContent = File.ReadAllText(fileInfo.FullName);
+                string allContent = File.ReadAllText(newFileInfo.FullName);
                 return allContent.Trim(' ', '\r', '\n');
             }
             else
@@ -200,7 +203,6 @@ namespace DaemonUtilNETv1
         }
 
         static void refreshAllTaskStatus(List<SettingItem> settingJson,
-            Dictionary<SettingItem, string> taskItemKeyDict,
             Dictionary<SettingItem, FileInfo> taskItemFileDict,
             Dictionary<SettingItem, bool> taskItemRunningStatus,
             Dictionary<SettingItem, int> taskItemPid
