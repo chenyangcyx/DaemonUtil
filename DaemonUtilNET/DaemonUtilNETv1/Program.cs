@@ -12,12 +12,12 @@ namespace DaemonUtilNETv1
         {
             // 获取配置文件
             FileInfo programSettingFileinfo = getSettingFile(args);
-            List<SettingJson.SettingItem> settingJson = getSetting(programSettingFileinfo.FullName);
+            List<SettingItem> settingJson = getSetting(programSettingFileinfo.FullName);
 
             // 输出配置文件信息
             for (int i = 0; i < settingJson.Count; i++)
             {
-                SettingJson.SettingItem item = settingJson[i];
+                SettingItem item = settingJson[i];
                 Console.WriteLine($"[任务{i + 1}] 任务名称: {item.taskName}");
                 Console.WriteLine($"[任务{i + 1}] 运行目录: {item.workFolder}");
                 Console.WriteLine($"[任务{i + 1}] 程序地址: {item.programName}");
@@ -26,19 +26,29 @@ namespace DaemonUtilNETv1
             }
 
             // 准备运行目录
-            DirectoryInfo workFolder = prepareWorkFolder();
+            prepareWorkFolder();
 
             // 构建程序运行用map
-            Dictionary<SettingJson.SettingItem, FileInfo> taskItemFileDict = new Dictionary<SettingJson.SettingItem, FileInfo>();
-            Dictionary<SettingJson.SettingItem, bool> taskItemRunningStatus = new Dictionary<SettingJson.SettingItem, bool>();
-            Dictionary<SettingJson.SettingItem, int> taskItemPid = new Dictionary<SettingJson.SettingItem, int>();
+            Dictionary<SettingItem, string> taskItemKeyDict = new Dictionary<SettingItem, string>();
+            Dictionary<SettingItem, FileInfo> taskItemFileDict = new Dictionary<SettingItem, FileInfo>();
+            Dictionary<SettingItem, bool> taskItemRunningStatus = new Dictionary<SettingItem, bool>();
+            Dictionary<SettingItem, int> taskItemPid = new Dictionary<SettingItem, int>();
+
+            // 初始化taskItemKeyDict
+            foreach (SettingItem item in settingJson)
+            {
+                taskItemKeyDict[item] = getTaskKey(item);
+                taskItemFileDict[item] = new FileInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workingFolder", taskItemKeyDict[item] + ".pid"));
+            }
 
             while (true)
             {
+                Console.WriteLine("--------------------------------------------------");
                 Console.WriteLine($"检测时间: {DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}");
+                List<SettingItem> toRunProgramList = new List<SettingItem>();
 
                 // 刷新所有任务状态并且打印状态
-                refreshAllTaskStatus(settingJson, taskItemFileDict, taskItemRunningStatus, taskItemPid);
+                refreshAllTaskStatus(settingJson, taskItemKeyDict, taskItemFileDict, taskItemRunningStatus, taskItemPid);
                 for (int i = 0; i < settingJson.Count; i++)
                 {
                     SettingItem item = settingJson[i];
@@ -46,31 +56,31 @@ namespace DaemonUtilNETv1
                     bool taskRunStatus = taskItemRunningStatus[item];
                     int taskPid = taskItemPid.ContainsKey(item) ? taskItemPid[item] : -1;
                     Console.WriteLine($"任务名称: {item.taskName}");
-                    Console.WriteLine($"  - pid文件路径: {taskFileInfo.Name}");
-                    Console.WriteLine($"  - task运行状态: {taskRunStatus}");
-                    Console.WriteLine($"  - task运行pid: {(taskPid == -1 ? "未运行" : taskPid)}");
+                    Console.WriteLine($" - pid文件路径: {taskFileInfo.Name}");
+                    Console.WriteLine($" - task运行状态: {taskRunStatus}");
+                    Console.WriteLine($" - task运行pid: {(taskPid == -1 ? "未运行" : taskPid)}");
 
-                    // 运行程序
                     if (!taskRunStatus)
                     {
-                        Process process = runCMD_Windows(item);
-                        Console.WriteLine($"运行程序: {process.ProcessName}-{process.Id}");
+                        toRunProgramList.Add(item);
                     }
                 }
 
                 // 运行所有未运行的任务
-                for (int i = 0; i < settingJson.Count; i++)
+                foreach (SettingItem item in toRunProgramList)
                 {
-
+                    Process process = runCMD_Windows(item);
+                    Console.WriteLine($"- 运行程序: {item.taskName}[processName: {process.ProcessName}, pid: {process.Id}]");
+                    // 将进程pid写入到指定文件
+                    using (StreamWriter writer = new StreamWriter(taskItemFileDict[item].FullName, false, Encoding.UTF8))
+                    {
+                        writer.AutoFlush = true;
+                        writer.Write(process.Id);
+                    }
                 }
 
-                Thread.Sleep(60000);
-            }
-
-            // 程序保活
-            while (true)
-            {
-                Console.ReadLine();
+                Console.WriteLine("--------------------------------------------------\n");
+                Thread.Sleep(5000);
             }
         }
 
@@ -138,9 +148,9 @@ namespace DaemonUtilNETv1
             }
         }
 
-        static List<SettingJson.SettingItem> getSetting(string path)
+        static List<SettingItem> getSetting(string path)
         {
-            return JsonSerializer.Deserialize<List<SettingJson.SettingItem>>(File.ReadAllText(path))!;
+            return JsonSerializer.Deserialize<List<SettingItem>>(File.ReadAllText(path))!;
         }
 
         static DirectoryInfo prepareWorkFolder()
@@ -154,10 +164,12 @@ namespace DaemonUtilNETv1
             return programTempFolderDirectoryInfo;
         }
 
-        static string getTaskKey(SettingJson.SettingItem settingItem)
+        static string getTaskKey(SettingItem settingItem)
         {
             StringBuilder stringBuilder = new StringBuilder();
-            stringBuilder.Append(settingItem.taskName)
+            stringBuilder
+                .Append(Environment.ProcessPath)
+                .Append(settingItem.taskName)
                 .Append(settingItem.workFolder)
                 .Append(settingItem.programName)
                 .Append(settingItem.runParameter);
@@ -187,16 +199,16 @@ namespace DaemonUtilNETv1
             }
         }
 
-        static void refreshAllTaskStatus(List<SettingJson.SettingItem> settingJson,
-            Dictionary<SettingJson.SettingItem, FileInfo> taskItemFileDict,
-            Dictionary<SettingJson.SettingItem, bool> taskItemRunningStatus,
-            Dictionary<SettingJson.SettingItem, int> taskItemPid
+        static void refreshAllTaskStatus(List<SettingItem> settingJson,
+            Dictionary<SettingItem, string> taskItemKeyDict,
+            Dictionary<SettingItem, FileInfo> taskItemFileDict,
+            Dictionary<SettingItem, bool> taskItemRunningStatus,
+            Dictionary<SettingItem, int> taskItemPid
             )
         {
             for (int i = 0; i < settingJson.Count; i++)
             {
-                SettingJson.SettingItem item = settingJson[i];
-                taskItemFileDict[item] = new FileInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "workingFolder", getTaskKey(item) + ".pid"));
+                SettingItem item = settingJson[i];
                 string? pid = getPidContent(taskItemFileDict[item]);
                 if (null == pid)
                 {
@@ -210,7 +222,9 @@ namespace DaemonUtilNETv1
                     try
                     {
                         process = Process.GetProcessById(int.Parse(pid));
-                        isRun = !process.HasExited && item.programName.Contains(process.ProcessName);
+                        FileInfo fromSetting = new FileInfo(item.programName);
+                        FileInfo fromEnviroment = new FileInfo(process.MainModule.FileName);
+                        isRun = !process.HasExited && fromSetting.FullName.Equals(fromEnviroment.FullName);
                     }
                     catch (Exception)
                     {
@@ -250,6 +264,7 @@ namespace DaemonUtilNETv1
             process.StartInfo.Arguments = settingItem.runParameter;
             process.StartInfo.WorkingDirectory = settingItem.workFolder;
             process.StartInfo.CreateNoWindow = true;
+            process.StartInfo.UseShellExecute = true;
 
             process.Start();
             return process;
